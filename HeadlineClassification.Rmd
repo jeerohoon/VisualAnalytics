@@ -1,0 +1,492 @@
+---
+title: "ISSS608 AY2020-21_T2 Visual Analytic Assignment"
+description: |
+
+  Description: Text Classification
+author:
+  - name: Jihun NAM
+  - email: jihun.nam.2020@mitb.sum.edu.sg
+
+date: 04-21-2021
+output:
+  distill::distill_article:
+    self_contained: false
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+## [1] Prepare Dataset
+
+### 1. Import Library
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+packages = c('tidyverse', 'readxl', 'dplyr', 'here', 'skimr', 'textdata',
+             'tm', 'topicmodels', 'tidytext', 'tibble','wordcloud', 'textstem',"stringr",
+             'dbscan', 'proxy', 'colorspace', 'textmineR')
+
+for(p in packages){
+  if(!require(p, character.only = T)){
+  install.packages(p)
+  }
+  library(p, character.only = T)
+}
+```
+
+### 2. Import data file
+
+1) Import raw articles (94k), the target for classification
+
+```{r}
+article_raw <- read_excel("data/Basev1(revised).xlsx")
+str(article_raw)
+names(article_raw)[3] <- 'text'
+
+article_raw <- article_raw %>% 
+  add_column(doc_id=paste("unclassified-", 1:nrow(.)), .before=1) %>% 
+  mutate(text=iconv(text, to="ascii", sub="")) 
+# change weired character to ascii code text
+
+raw_df <- article_raw[,c(1,4)] 
+raw_df$type <- 'unclassified'
+
+head(raw_df)
+```
+
+2) Import labeled covid articles
+
+```{r}
+covid_raw <- read_xlsx("data/corona_labeled_article.xlsx")
+names(covid_raw)[3] <- 'text'
+
+covid_raw <- covid_raw %>% 
+  add_column(doc_id=paste("covid-", 1:nrow(.)), .before=1) %>% 
+  mutate(text=iconv(text, to="ascii", sub="")) 
+head(covid_raw)
+
+# Extract titles from covid_raw data set
+covid_title <- covid_raw[,c(1,4)] 
+covid_title$type <- 'covid'
+head(covid_title)
+```
+
+3) Import labeled non-covid articles (from textdata library)
+
+```{r}
+library(textdata) # get headlines from textdata library and extract only "test" dataset because it is small
+news <- dataset_ag_news(split="test") 
+names(news)[2] <- 'text'
+
+non_covid_title <- news[,2] %>% 
+  sample_frac(1.0) # sample size
+non_covid_title$type <- 'non_covid'
+non_covid_title <- non_covid_title %>% 
+  add_column(doc_id=paste("non_covid-", 1:nrow(.)), .before=1) %>% 
+  mutate(text=iconv(text, to="ascii", sub="")) 
+head(non_covid_title)
+
+```
+
+### 3. Union all three data sets
+
+```{r}
+labeled_news <- rbind(non_covid_title,covid_title,raw_df)
+
+labeled_news$type <- as.factor(labeled_news$type)
+labeled_news
+
+```
+
+```{r}
+sample_tmp1 <- article_raw[7860:7870,]
+sample_tmp1
+# short example of dictionnary.
+sample_tmp1_1 <- VCorpus(DataframeSource(sample_tmp1))
+
+```
+
+## [2] Preprocess Text Data
+
+### 1. Create function for removing unnecessary words
+
+```{r}
+# exclude certain word
+remove_func <- content_transformer(function(x, pattern)
+  {return(gsub(pattern, "", x))})
+
+# change word to space
+space_func <- content_transformer(function(x, pattern)
+  {return(gsub(pattern, " ", x))})
+
+# change to "covid" from similar keywords
+change_covid_func <- content_transformer(function(x, pattern)
+  {return(gsub(pattern, "covid", x))})
+
+# Create own stopwords set
+add_stopwords <- c(stopwords("english"),
+c("first", "second", "one", "two", "three", "four", "another",
+  "can", "cant", "don", "dont", "get", "got",
+  "last", "least", "just", "will", "week","weeks", "quot",
+  "ago", "day", "days", "night", "nights", "month","months",
+  "years", "year", "next", "now", "today","yesterday",
+  "may", "new", "york", "according", "back", "say", "says",
+  "said", "make", "made", "reuters", "monday", "tuesday",
+  "wednesday", "thursday", "friday", "saturday","sunday",
+  'coconut', 'coconuts', 'singapor', 'spore', 'sporean', 'singapore')) 
+# exclude term "singapore"
+```
+
+### 2. Create corpus for training and target classification
+
+```{r}
+library(tm)
+train_df <- labeled_news %>%
+  filter(type != 'unclassified')
+train_corpus <- VCorpus(DataframeSource(train_df))
+
+target_df <- labeled_news %>%
+  filter(type == 'unclassified')
+target_corpus <- VCorpus(DataframeSource(target_df))
+
+```
+
+### 3. Create function for cleaning corpus
+
+```{r}
+cleancorpus <- function(headlines) {
+   
+  # change to all lower letters
+  headlines <- tm_map(headlines, content_transformer(tolower))
+  
+  # remove "(xxx)" pattern
+  headlines <- tm_map(headlines, remove_func, "\\(.+\\)")
+  
+  # remove stopwords
+  headlines <- tm_map(headlines, removeWords, add_stopwords)
+  
+  # change to space
+  headlines <- tm_map(headlines, space_func, ":")
+  headlines <- tm_map(headlines, space_func, ";")
+  headlines <- tm_map(headlines, space_func, "/")
+  headlines <- tm_map(headlines, space_func, "\\.")
+  headlines <- tm_map(headlines, space_func, "\\\\")
+  headlines <- tm_map(headlines, space_func, "-")
+  
+  # change "covid" pattern
+  headlines <- tm_map(headlines, change_covid_func, "corona|coronavirus|covidvirus|corona virus|covid19|covid 19|wuhan virus|wuhanvirus|covid 19")
+  
+
+  # additional remove
+  headlines <- tm_map(headlines, removePunctuation) # remove punctuation
+  headlines <- tm_map(headlines, removeNumbers) # remove numbers
+  headlines <- tm_map(headlines, stripWhitespace) # remove white space
+  headlines <- tm_map(headlines, content_transformer(trimws)) # remove white space
+  headlines <- tm_map(headlines, stemDocument) # extract stems
+  #headlines <- tm_map(headlines, dictionary = lexicon::hash_lemmas, lemmatize_words) # lemmatize words
+  
+  # remove stopwords again
+  headlines <- tm_map(headlines, removeWords, add_stopwords)
+  
+  return(headlines)
+}
+```
+
+### 4. Apply created functions to clean corpus
+
+```{r}
+# see 1 to 3 headlines
+cleaned_train_corpus <- cleancorpus(train_corpus)
+lapply(cleaned_train_corpus, content)[1:3]
+
+cleaned_target_corpus <- cleancorpus(target_corpus)
+lapply(cleaned_target_corpus, content)[1:3]
+
+```
+
+### 5. Create Document Term Matrix
+
+1) Training dataset
+
+```{r}
+# Store cleaned data set "leadlines" to document term matrix form
+# wordlengths: include words only if the length of words is between 3 and 10 
+# bounds: includes words only if the words appear between 2 (#of train documents * 0.001%) and 9000(#of train documents * 95%) documents.
+dtm <- DocumentTermMatrix(cleaned_train_corpus,
+                          control = list(wordLengths=c(3,10),
+                                         bounds=list(global=c(2, 9000))))
+
+inspect(dtm)
+
+```
+
+
+2) Target dataset
+
+```{r}
+# Store cleaned data set "leadlines" to document term matrix form
+# wordlengths: include words only if the length of words is between 3 and 10 
+# bounds: includes words only if the words appear between 3 (#of target documents * 0.001%) and 90000(#of target documents * 95%) documents.
+target_dtm <- DocumentTermMatrix(cleaned_target_corpus,
+                          control = list(wordLengths=c(3,10),
+                                         bounds=list(global=c(2, 90000))))
+
+inspect(target_dtm)
+
+```
+
+### 6. Observe freqent terms
+
+```{r}
+
+# transform normal form of matrix
+termfreq <- colSums(as.matrix(dtm))
+
+# Extract top-6 freqent term
+termfreq[head(order(termfreq, decreasing = TRUE))]
+
+# Extract low-6 freqent term
+termfreq[tail(order(termfreq, decreasing = TRUE))]
+
+# Extract freqent term over n (=500)
+findFreqTerms(dtm, lowfreq = 3000)
+
+# Find highly related words with a certain term (correlation > 0.1)
+findAssocs(dtm, c("covid", "footbal"), c(0.15, 0.15))
+
+```
+
+#### 7. Draw word cloud with comparison cloud
+
+```{r}
+covidornot <- as.matrix(dtm)
+
+out <- strsplit(as.character(rownames(covidornot)),'-') 
+
+#do.call(rbind, out)[,2]
+rownames(covidornot) <- do.call(rbind, out)[,1]
+
+
+covidornot[1:10, 1:10]
+
+covidornot <- rowsum(covidornot, group = rownames(covidornot))
+covidornot[,1:10]
+
+comparison.cloud(t(covidornot), 
+                 colors=c("cornflowerblue", "tomato"),
+                 title.size = 2, title.colors = c("blue", "red"),
+                 title.bg.colors = "wheat",
+                 rot.per=0,
+                 scale=c(5,0.4),
+                 max.words=100)
+```
+
+## [3] Apply Naive Bayes model for learning DTM
+
+### 1. Divide into train/test data set from training dat aset (train_df -> 70%:30%)
+
+```{r}
+set.seed(123)
+
+train <- sample(nrow(train_df), 0.7*nrow(train_df))
+y.train <- train_df[train, ]$type
+y.test <- train_df[-train, ]$type
+table(y.train)
+table(y.test)
+
+# well devided into two sets
+prop.table(table(y.train))
+prop.table(table(y.test))
+```
+
+### 2. Create function to change values to categorical factors
+
+```{r}
+toFactor <- function(x) {
+ x <- ifelse(x>0, 1, 0)
+ x <- factor(x, level=c(0,1), labels=c("no", "yes"))
+ return(x)
+}
+
+```
+
+### 3. Apply created function to DTM
+
+```{r}
+# based on the frequency of apearance
+train_df.dtm <- apply(dtm, MARGIN = 2, toFactor) # column direction
+str(train_df.dtm)
+train_df.dtm[1:10, 1:10]
+
+x.train <- train_df.dtm[train,]
+x.test <- train_df.dtm[-train,]
+```
+
+### 4. Apply Naive Bayes Package for learning and predict
+
+```{r}
+library(e1071) # Naive Bayes Package
+train_df.nb <- naiveBayes(x=x.train, y=y.train)
+
+train_df.nb.pred <- predict(train_df.nb, newdata=x.test)
+head(train_df.nb.pred)
+
+```
+
+### 5. compare predicted values with original labels 
+
+```{r}
+table(y.test, train_df.nb.pred, dnn=c("Actual", "Predicted"))
+mean(train_df.nb.pred == y.test)
+```
+
+### 6. Apply Naive Bayes Package for learning whole data set of DTM
+
+```{r}
+
+train_whole_df.nb <- naiveBayes(x=train_df.dtm, y=train_df$type)
+
+```
+
+
+
+## [4] Classify Target articles (94k)
+
+### 1. Create function to adapt pre-learned model
+
+```{r}
+
+classifier <- function(target_sub_dtm) {
+  # target data
+  target_df.dtm <- apply(target_sub_dtm, MARGIN = 2, toFactor) # column direction
+  target_df.nb.pred <- predict(train_df.nb, newdata=target_df.dtm)
+  return(merge(rownames(target_sub_dtm), target_df.nb.pred, by=0, all=TRUE))
+}
+
+```
+
+```{r}
+# sample test
+target_dtm_10 <- target_dtm[1000:1020,]
+target_dtm_10.result <- classifier(target_dtm_10)
+article_raw_10 <- merge(x = article_raw[1000:1020,], y = target_dtm_10.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+
+article_raw_10[,c(1,2,4,11)]
+```
+
+```{r, eval=F}
+str(article_raw_10)
+head(article_raw_10[c(1:3),c(2,4,5,6,7,8,9,11)])
+names(article_raw_10)[11] <- 'Classification'
+write.csv(article_raw_10[,c(2,4,5,6,7,8,9,11)], 
+          file = 'data/article_raw_10_20pct_new2.csv')
+```
+2) Apply whole DTM data set
+
+```{r}
+
+whole_classifier <- function(target_sub_dtm) {
+  # target data
+  target_df.dtm <- apply(target_sub_dtm, MARGIN = 2, toFactor) # column direction
+  target_df.nb.pred <- predict(train_whole_df.nb, newdata=target_df.dtm)
+  return(merge(rownames(target_sub_dtm), target_df.nb.pred, by=0, all=TRUE))
+}
+
+```
+
+```{r}
+# sample test
+whole_target_dtm_10 <- target_dtm[1000:1020,]
+whole_target_dtm_10.result <- whole_classifier(whole_target_dtm_10)
+whole_article_raw_10 <- merge(x = article_raw[1000:1020,], y = whole_target_dtm_10.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+
+whole_article_raw_10[,c(1,2,4,11)]
+
+```
+
+```{r, eval=F}
+str(whole_article_raw_10)
+head(whole_article_raw_10[c(1:3),c(2,4,5,6,7,8,9,11)])
+names(whole_article_raw_10)[11] <- 'Classification'
+write.csv(whole_article_raw_10[,c(2,4,5,6,7,8,9,11)], 
+          file = 'data/whole_article_raw_10_20pct.csv')
+```
+
+
+### 2. Divide into 10 data sets to lessen memory overload
+
+```{r, eval=F}
+target_dtm_10k <- target_dtm[1:10000,]
+target_dtm_20k <- target_dtm[10001:20000,]
+target_dtm_30k <- target_dtm[20001:30000,]
+target_dtm_40k <- target_dtm[30001:40000,]
+target_dtm_50k <- target_dtm[40001:50000,]
+target_dtm_60k <- target_dtm[50001:60000,]
+target_dtm_70k <- target_dtm[60001:70000,]
+target_dtm_80k <- target_dtm[70001:80000,]
+target_dtm_90k <- target_dtm[80001:90000,]
+target_dtm_100k <- target_dtm[90001:94841,]
+
+```
+
+### 3. Apply classifier function to all 10 divided data sets
+
+```{r, eval=F}
+target_dtm_10k.result <- classifier(target_dtm_10k)
+target_dtm_20k.result <- classifier(target_dtm_20k)
+target_dtm_30k.result <- classifier(target_dtm_30k)
+target_dtm_40k.result <- classifier(target_dtm_40k)
+target_dtm_50k.result <- classifier(target_dtm_50k)
+target_dtm_60k.result <- classifier(target_dtm_60k)
+target_dtm_70k.result <- classifier(target_dtm_70k)
+target_dtm_80k.result <- classifier(target_dtm_80k)
+target_dtm_90k.result <- classifier(target_dtm_90k)
+target_dtm_100k.result <- classifier(target_dtm_100k)
+
+```
+
+```{r, eval=F}
+#target_dtm_40k.result <- classifier(target_dtm_40k)
+```
+
+### 4. Join raw article and classified result
+
+```{r, eval=F}
+article_raw_10k <- merge(x = article_raw[1:10000,], y = target_dtm_10k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_20k <- merge(x = article_raw[10001:20000,], y = target_dtm_20k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_30k <- merge(x = article_raw[20001:30000,], y = target_dtm_30k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_40k <- merge(x = article_raw[30001:40000,], y = target_dtm_40k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_50k <- merge(x = article_raw[40001:50000,], y = target_dtm_50k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_60k <- merge(x = article_raw[50001:60000,], y = target_dtm_60k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_70k <- merge(x = article_raw[60001:70000,], y = target_dtm_70k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_80k <- merge(x = article_raw[70001:80000,], y = target_dtm_80k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_90k <- merge(x = article_raw[80001:90000,], y = target_dtm_90k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+article_raw_100k <- merge(x = article_raw[90001:94841,], y = target_dtm_100k.result, by.x = "doc_id", by.y = 'x', all.x = TRUE)
+```
+
+### 5. Union all subsets of classified results
+
+```{r, eval=F}
+article_raw_classified <- rbind(article_raw_10k, 
+                                article_raw_20k,
+                                article_raw_30k,
+                                article_raw_40k,
+                                article_raw_50k,
+                                article_raw_60k,
+                                article_raw_70k,
+                                article_raw_80k,
+                                article_raw_90k,
+                                article_raw_100k
+                                )
+```
+
+### 6. Export final result to csv file 
+
+```{r, eval=F}
+str(article_raw_classified)
+head(article_raw_classified[c(1:3),c(2,4,5,6,7,8,9,11)])
+names(article_raw_classified)[11] <- 'Classification'
+write.csv(article_raw_classified[,c(2,4,5,6,7,8,9,11)], 
+          file = 'data/article_raw_classified_cleaned_new.csv')
+```
+
