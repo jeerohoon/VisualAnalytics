@@ -1,0 +1,172 @@
+---
+title: "EDA"
+author: "Jihun_Nam"
+
+date: 04-21-2021
+output:
+  distill::distill_article:
+    self_contained: False
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preperation
+
+### 1. Library
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+packages = c('tidyverse', 'readxl', 'dplyr', 'here', 'skimr')
+
+for(p in packages){
+  if(!require(p, character.only = T)){
+  install.packages(p)
+  }
+  library(p, character.only = T)
+}
+```
+
+### 2. Importing data file
+
+```{r}
+article_raw <- read_excel("data/All_media.xlsx")
+str(article_raw)
+```
+
+```{r}
+colnames(article_raw)
+
+```
+
+### 3. Handling datetime
+
+```{r}
+article_raw$week <- as.numeric(format(as.Date(article_raw$Published), "%V"))
+article_raw$month <- as.numeric(format(as.Date(article_raw$Published), "%m"))
+```
+
+### 4. Pivot table for whole year by site
+
+```{r}
+article_media <- article_raw %>% 
+  group_by(Source) %>% 
+  summarise(no_of_article = n(), 
+            mean_facebook_total =  mean(FacebookInteractions, na.rm= TRUE), 
+            median_facebook_total =  median(FacebookInteractions, na.rm= TRUE), 
+            sd_facebook_total = sd(FacebookInteractions), na.rm= TRUE)
+```
+
+### 5. Pivot table for daily trend analysis
+
+```{r}
+article_daily1 <- article_raw %>% 
+  group_by(Published, Source) %>% 
+  summarise(no_of_article = n(), 
+            mean_facebook_total =  mean(FacebookInteractions, na.rm= TRUE), 
+            median_facebook_total =  median(FacebookInteractions, na.rm= TRUE), 
+            sd_facebook_total = sd(FacebookInteractions), na.rm= TRUE)
+```
+
+### 6. Pivot table for monthly trend analysis
+
+```{r}
+article_monthly1 <- article_raw %>% 
+  group_by(month, Source) %>% 
+  summarise(no_of_article = n(), 
+            mean_facebook_total =  mean(FacebookInteractions, na.rm= TRUE), 
+            median_facebook_total =  median(FacebookInteractions, na.rm= TRUE), 
+            sd_facebook_total = sd(FacebookInteractions), na.rm= TRUE)
+```
+
+
+## EDA
+
+### 1. Total number of articles by media (Whole 2020)
+
+```{r}
+ggplot(data=article_raw, aes(y=Source)) +
+  geom_bar()
+
+```
+
+### 2. Brief stats
+
+```{r}
+article_media
+
+```
+
+```{r}
+article_daily1
+
+```
+
+
+```{r}
+
+article_monthly1
+```
+
+### 3.Boxplot of facebook_total per article by media (Whole 2020)
+
+```{r}
+ggplot(data=article_raw,
+       aes(x = FacebookInteractions, y= Source)) +
+  geom_boxplot(fill="light blue")+
+  geom_boxplot(alpha=0.5)
+
+```
+
+### 4. Daily trend of the number of posting articles by media
+
+```{r}
+ggplot(data = article_daily1, aes(x = Published, y = no_of_article, color = Source)) +
+  geom_line()
+```
+
+### 5. Daily trend of mean_facebook_total per articles by media
+
+```{r}
+ggplot(data = article_daily1, aes(x = Published, y = mean_facebook_total, color = Source)) +
+  geom_line()
+```
+
+
+### Monthly trend of no_of_article by media
+
+
+```{r}
+ggplot(data = article_monthly1, aes(x = month, y = no_of_article, color = Source)) +
+  geom_line()
+```
+
+### Daily trend of mean_facebook_total by media
+
+```{r}
+ggplot(data = article_monthly1, aes(x = month, y = mean_facebook_total, color = Source)) +
+  geom_line()
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+# article_new <- article_raw %>%
+#   select("Published" , "Group", "Headline", "Link", "Website","Authors","Pinterest", "LinkedIn", 
+#          "Twitter Influencer Shares" ,"Total Facebook", "Likes",  "Shares","Comments","Total Interactions",
+#          "Count") %>%
+#   filter(!is.na(Count))
+
+```
+
+
+
+
+
