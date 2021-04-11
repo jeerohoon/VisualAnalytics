@@ -1,7 +1,7 @@
 ---
-title: "How to detect unusual patterns in news articles"
+title: "ISSS608 AY2020-21_T2 Visual Analytic DataViz Assignment"
 description: |
-  Description: ANOVA Test and Time Series Anomaly Detection using R
+  How to detect unusual patterns in news articles
 
 author:
   - name: Jihun NAM
@@ -14,7 +14,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 ```
 
 # 1. Overview
